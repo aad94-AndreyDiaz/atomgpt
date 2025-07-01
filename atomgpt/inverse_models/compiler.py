@@ -42,6 +42,12 @@ AtomGPT_COMPILE_LOCATION = "atomgpt_compiled_cache"
 global AtomGPT_COMPILE_USE_TEMP
 AtomGPT_COMPILE_USE_TEMP = False
 
+# Disable some compilations if old versions are seen
+#OLD_TORCH_VERSION = Version(torch.__version__) < Version("2.5.0")
+#major, minor = torch.cuda.get_device_capability()
+#OLD_CUDA_ARCH_VERSION = (major <= 7) and (minor < 5)
+#OLD_TRITON_VERSION = Version(triton.__version__) < Version("3.0.0")
+
 # Check if AtomGPT Studio is allowed
 import importlib.util
 
@@ -687,120 +693,30 @@ loss = loss_fct(shift_logits, shift_labels)
 """
 
 cross_entropy_replacement_1 = """
-NOT_RETURN_LOGITS = os.environ.get('AtomGPT_RETURN_LOGITS', '0') == '0'
-
-all_locals = locals()
-n_items = None
-for __kwargs in all_locals.values():
-    if type(__kwargs) is dict:
-        n_items = __kwargs.get("num_items_in_batch", None) or __kwargs.get("n_items", None)
-        break
 requires_grad_ = self.lm_head.weight.requires_grad
 requires_grad_ = requires_grad_ or self.lm_head.weight.dtype == torch.float32
 
-if labels is None:
-    logits = self.lm_head(hidden_states\\1)
-elif (AtomGPT_STUDIO_ENABLED and NOT_RETURN_LOGITS and labels is not None and not requires_grad_):
-    loss = fast_linear_cross_entropy(
-        hidden_states        = hidden_states\\1,
-        lm_head              = self.lm_head,
-        labels               = labels,
-        num_items_in_batch   = n_items,
-        logit_softcapping    = None if (\\4) == () else (\\4),
-        logit_scale_multiply = None if (\\2) == () else (\\2),
-        logit_scale_divide   = None if (\\3) == () else (\\3),
-    )
-elif ((\\2) == () and (\\3) == ()) and NOT_RETURN_LOGITS and self.loss_function.__name__.endswith("ForCausalLMLoss") and labels is not None and not requires_grad_:
-    loss = fused_linear_cross_entropy(
-        hidden_states      = hidden_states\\1,
-        lm_weight          = self.lm_head.weight,
-        labels             = labels.to(self.lm_head.weight.device),
-        num_items_in_batch = n_items,
-        logit_softcapping  = None if (\\4) == () else (\\4),
-    )
-else:
-    logits = self.lm_head(hidden_states\\1)
-    def _compiled_loss_function(
-        output_logits : torch.Tensor,
-        output_labels : torch.Tensor,
-        logit_scale_multiply : float = 0,
-        logit_scale_divide : float = 0,
-        logit_softcapping : float = 0,
-        vocab_size : int = 0,
-        n_items : int = 0,
-    ):
-        device = output_logits.device
-        if logit_scale_multiply != 0:
-            output_logits = output_logits * logit_scale_multiply
-        if logit_scale_divide != 0:
-            output_logits = output_logits / logit_scale_divide
-        if logit_softcapping != 0:
-            output_logits = output_logits / logit_softcapping
-            output_logits = torch.tanh(output_logits)
-            output_logits = output_logits * logit_softcapping
+logits = self.lm_head(hidden_states\\1)
 
-        shift_logits = output_logits
-        shift_labels = torch.empty_like(output_labels, device = device)
-        shift_labels[..., :-1] = output_labels[..., 1:]
-        shift_labels[..., -1] = -100
-        # shift_logits = output_logits[..., :-1, :].float().contiguous()
-        # shift_labels = output_labels[..., 1:].contiguous()
+def _compiled_loss_function(
+    output_logits : torch.Tensor,
+    output_labels : torch.Tensor,
+    vocab_size : int = 0,
+):
+    shift_logits = output_logits[..., :-1, :].contiguous()
+    shift_labels = output_labels[..., 1:].contiguous()
+    shift_logits = shift_logits.view(-1, vocab_size)
+    shift_labels = shift_labels.view(-1)
+    shift_labels = shift_labels.to(shift_logits.device)
+    loss_fct = torch.nn.CrossEntropyLoss()
+    loss = loss_fct(shift_logits, shift_labels)
+    return loss
 
-        shift_logits = shift_logits.view(-1, vocab_size)
-        shift_labels = shift_labels.view(-1)
-
-        n_chunks = int(math.ceil((vocab_size / 262144) * 8))
-        if requires_grad_: n_chunks += 2
-        __shift_logits = torch.chunk(shift_logits, n_chunks, dim = 0)
-        __shift_labels = torch.chunk(shift_labels, n_chunks, dim = 0)
-        loss = 0.0
-        for (_shift_logits, _shift_labels) in zip(__shift_logits, __shift_labels):
-            loss += torch.nn.functional.cross_entropy(
-                input  = _shift_logits.float().contiguous(),
-                target = _shift_labels.contiguous(),
-                reduction = 'sum',
-            )
-        pass
-        if n_items != 0:
-            loss = loss / n_items
-        else:
-            loss = loss / (shift_labels != -100).sum()
-        return loss
-    pass
-    _compiled_loss_function = torch.compile(
-        _compiled_loss_function,
-        fullgraph = False,
-        dynamic = True,
-        options = torch_compile_options,
-    )
-    torch._dynamo.mark_dynamic(logits, 1)
-    torch._dynamo.mark_dynamic(labels, 1)
-    loss = _compiled_loss_function(
-        output_logits        = logits,
-        output_labels        = labels,
-        logit_scale_multiply = (\\2) if (\\2) != () else 0,
-        logit_scale_divide   = (\\3) if (\\3) != () else 0,
-        logit_softcapping    = (\\4) if (\\4) != () else 0,
-        vocab_size           = (\\6),
-        n_items              = n_items if n_items is not None else 0,
-    )
-    # if (\\2) != ():
-    #     logits = logits * (\\2)
-    # if (\\3) != ():
-    #     logits = logits / (\\3)
-    # if (\\4) != ():
-    #     logits = logits / (\\4)
-    #     logits = torch.tanh(logits)
-    #     logits = logits * (\\4)
-    # shift_logits = logits[..., :-1, :].float().contiguous()
-    # shift_labels = labels[..., 1:].contiguous()
-    # reduction = 'mean' if n_items is None else 'sum'
-    # loss_fct = torch.nn.CrossEntropyLoss(reduction = reduction)
-    # shift_logits = shift_logits.view(-1, \\6)
-    # shift_labels = shift_labels.view(-1)
-    # shift_labels = shift_labels.to(shift_logits.device)
-    # loss = loss_fct(shift_logits, shift_labels)
-    # if n_items is not None: loss = loss / n_items
+loss = _compiled_loss_function(
+    output_logits = logits,
+    output_labels = labels,
+    vocab_size = (\\6),
+)
 """
 
 cross_entropy_find_2 = """
