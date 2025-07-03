@@ -120,18 +120,20 @@ def predict(
         adapter = os.path.join(output_dir, "adapter_config.json")
         if os.path.exists(adapter):
             model_name = output_dir  # temp_config["model_name"]
+#change2
     if config_path is not None:
         config_name = config_path
-        if verbose:
-            print("config used", config_name)
+    if verbose:
+        print("config used", config_name)
         temp_config = loadjson(config_name)
-        if verbose:
-            print("config used", temp_config)
-        temp_config = TrainingPropConfig(**temp_config).dict()
+    if verbose:
+        print("config used", temp_config)
         max_seq_length = temp_config["max_seq_length"]
         dtype = temp_config["dtype"]
+    else:
+        temp_config = TrainingPropConfig().dict()
+
     # temp_config = TrainingPropConfig().dict()
-    temp_config = TrainingPropConfig(**temp_config).dict()
     if verbose:
         pprint.pprint(temp_config)
     if model_name is None:
